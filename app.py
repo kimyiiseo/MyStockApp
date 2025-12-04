@@ -201,7 +201,7 @@ with tab2:
         tticker = c2.selectbox("종목", tickers)
         tprice = c2.number_input("단가", min_value=0.0, step=0.01) # 소수점 허용
         # [수정] step=0.0001 추가
-        tqty = c3.number_input("수량", min_value=0.0, format="%.4f", step=0.0001)
+        tqty = c3.number_input("수량", min_value=0.0, format="%.4f", step=0.000001)
         if st.form_submit_button("✅ 저장"):
             if tprice>0 and tqty>0:
                 if tticker in pf['티커'].values:
