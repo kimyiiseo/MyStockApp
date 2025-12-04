@@ -12,32 +12,28 @@ from datetime import datetime
 # [기본 설정]
 # ---------------------------------------------------------
 st.set_page_config(page_title="내 주식 파트너", layout="wide")
-st.title("📈 내 자산 관리 시스템 (Auto Fix)")
+st.title("📈 내 자산 관리 시스템 (Permission Fix)")
 
 # ---------------------------------------------------------
-# [구글 시트 연결: 자동 수리 모드]
+# [구글 시트 연결]
 # ---------------------------------------------------------
 def get_google_sheet_client():
     try:
-        # Secrets에서 가져오기
         if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"]:
-            st.error("❌ Secrets 설정이 없습니다. [connections.gsheets] 섹션을 확인하세요.")
+            st.error("❌ Secrets 설정 오류")
             return None
             
         s = st.secrets["connections"]["gsheets"]
         
-        # [핵심] 키 자동 수리 (줄바꿈 문자가 깨져있으면 강제로 고침)
-        # 1. private_key 가져오기
+        # 줄바꿈 문자 수리
         raw_key = s.get("private_key", "")
-        # 2. \\n (글자)을 \n (진짜 줄바꿈)으로 변경
         fixed_key = raw_key.replace("\\n", "\n")
         
-        # 딕셔너리 재조립 (없는 키가 있어도 앱이 안 꺼지게 .get 사용)
         json_creds = {
             "type": s.get("type", "service_account"),
             "project_id": s.get("project_id"),
             "private_key_id": s.get("private_key_id"),
-            "private_key": fixed_key,  # 수리된 키 사용!
+            "private_key": fixed_key,
             "client_email": s.get("client_email"),
             "client_id": s.get("client_id"),
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
@@ -46,28 +42,21 @@ def get_google_sheet_client():
             "client_x509_cert_url": s.get("client_x509_cert_url")
         }
         
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        
-        # 연결 시도
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(json_creds, scopes=scopes)
         client = gspread.authorize(creds)
         
-        # 시트 주소 확인
         spreadsheet_url = s.get("spreadsheet")
-        if not spreadsheet_url:
-            st.error("❌ Secrets에 'spreadsheet' 주소가 없습니다.")
-            return None
-            
         sh = client.open_by_url(spreadsheet_url)
         return sh
         
     except Exception as e:
-        # [디버깅] 에러의 정체를 정확히 출력 (타입 + 메시지)
-        st.error(f"❌ 연결 실패 원인: {type(e).__name__}")
-        st.code(str(e)) # 에러 메시지 원문 보여주기
+        # PermissionError가 뜨면 여기서 잡힙니다.
+        if "403" in str(e) or "Permission" in str(e):
+             st.error("🚨 **권한 오류 (PermissionError)**")
+             st.info(f"👉 '{s.get('client_email')}' 이 주소를 구글 시트 [공유]에 추가하고 **[편집자]** 권한을 주세요.")
+        else:
+             st.error(f"❌ 연결 실패: {e}")
         return None
 
 def load_data():
@@ -76,19 +65,12 @@ def load_data():
         try:
             worksheet = sh.worksheet("portfolio")
             data = worksheet.get_all_records()
-            if not data:
-                # 초기 데이터
-                return pd.DataFrame([
-                    {"티커": "AAPL", "보유수량": 10.0, "목표비중(%)": 30},
-                    {"티커": "TSLA", "보유수량": 5.0, "목표비중(%)": 30}
-                ])
+            if not data: return pd.DataFrame([{"티커": "AAPL", "보유수량": 10.0, "목표비중(%)": 30}, {"티커": "TSLA", "보유수량": 5.0, "목표비중(%)": 30}])
             return pd.DataFrame(data)
         except gspread.exceptions.WorksheetNotFound:
-            st.warning("⚠️ 'portfolio' 탭을 찾을 수 없습니다. 시트 아래 탭 이름을 확인하세요.")
+            st.warning("⚠️ 'portfolio' 탭이 없습니다.")
             return pd.DataFrame()
-        except Exception as e:
-            st.warning(f"데이터 읽기 오류: {e}")
-            return pd.DataFrame()
+        except: return pd.DataFrame()
     return pd.DataFrame()
 
 def save_data(df):
@@ -98,7 +80,11 @@ def save_data(df):
             worksheet = sh.worksheet("portfolio")
             worksheet.clear()
             worksheet.update([df.columns.values.tolist()] + df.values.tolist())
-        except Exception as e: st.error(f"저장 실패: {e}")
+            return True # 성공하면 True 반환
+        except Exception as e:
+            st.error(f"저장 실패: {e}")
+            return False # 실패하면 False
+    return False
 
 def load_history():
     sh = get_google_sheet_client()
@@ -115,7 +101,7 @@ def save_history(new_record_df):
         try:
             worksheet = sh.worksheet("history")
             for row in new_record_df.values.tolist(): worksheet.append_row(row)
-        except Exception as e: st.error(f"기록 실패: {e}")
+        except: pass
 
 # ---------------------------------------------------------
 # [뉴스 & 시장 지표]
@@ -160,11 +146,12 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 리밸런싱", "📝 거래 기록", "�
 with tab1:
     st.markdown("### ⚖️ 포트폴리오")
     df = load_data()
-    # 데이터가 비어있어도 에러 안 나게 처리
+    
+    # 데이터가 없으면 빈 껍데기라도 만듦
     if df.empty:
-        st.info("데이터를 불러오는 중이거나 시트가 비어있습니다. 잠시만 기다리세요.")
         df = pd.DataFrame(columns=["티커", "보유수량", "목표비중(%)"])
-        
+        st.info("데이터를 불러오지 못했습니다. 위쪽 에러 메시지를 확인하세요.")
+
     edited_df = st.data_editor(df, num_rows="dynamic", key="portfolio_editor",
         column_config={
             "보유수량": st.column_config.NumberColumn(format="%.4f"),
@@ -173,44 +160,59 @@ with tab1:
         
     if st.button("💾 구글 시트에 저장 및 분석"):
         with st.spinner('처리 중...'):
-            save_data(edited_df)
-            final_data = []
-            for idx, row in edited_df.iterrows():
-                try:
-                    ticker = row.get('티커')
-                    if not ticker: continue
-                    qty = float(row['보유수량']) if pd.notnull(row['보유수량']) else 0
-                    tgt = float(row['목표비중(%)']) if pd.notnull(row['목표비중(%)']) else 0
-                    
-                    stock = yf.Ticker(ticker)
-                    hist = stock.history(period="1d")
-                    price = hist['Close'].iloc[-1] if not hist.empty else 0
-                except: price = 0
-                final_data.append({"티커": ticker, "보유수량": qty, "현재가($)": price, "현재평가액($)": price*qty, "목표비중(%)": tgt})
+            # 저장 먼저 시도
+            success = save_data(edited_df)
             
-            res = pd.DataFrame(final_data)
-            if not res.empty:
-                val = res['현재평가액($)'].sum()
-                sim = val + budget
-                res['이상적'] = sim * (res['목표비중(%)']/100)
-                res['부족'] = res['이상적'] - res['현재평가액($)']
+            if success: # 저장이 성공했을 때만 계산 시작! (NameError 방지)
+                final_data = []
+                for idx, row in edited_df.iterrows():
+                    # 변수 초기화 (NameError 방지)
+                    ticker = ""
+                    qty = 0.0
+                    tgt = 0.0
+                    price = 0.0
+                    
+                    try:
+                        ticker = row.get('티커', "")
+                        if not ticker: continue # 티커 없으면 건너뜀
+                        
+                        qty = float(row.get('보유수량', 0)) if pd.notnull(row.get('보유수량')) else 0
+                        tgt = float(row.get('목표비중(%)', 0)) if pd.notnull(row.get('목표비중(%)')) else 0
+                        
+                        stock = yf.Ticker(ticker)
+                        hist = stock.history(period="1d")
+                        price = hist['Close'].iloc[-1] if not hist.empty else 0
+                    except: 
+                        price = 0
+                    
+                    # 모든 변수가 준비된 상태에서만 append
+                    final_data.append({"티커": ticker, "보유수량": qty, "현재가($)": price, "현재평가액($)": price*qty, "목표비중(%)": tgt})
                 
-                buy = res[(res['부족']>0) & (res['현재가($)']>0)].copy()
-                if not buy.empty:
-                    need = buy['부족'].sum()
-                    ratio = budget/need if (need>budget and need>0) else 1
-                    buy['배정'] = buy['부족'] * ratio
-                    buy['수량'] = buy['배정'] / buy['현재가($)']
-                    st.success("🛒 매수 추천")
-                    st.dataframe(buy[['티커', '현재가($)', '수량', '배정']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.4f}', '배정':'${:,.2f}'}))
-                else: st.info("매수 없음")
-                
-                sell = res[(res['부족']<0) & (res['현재가($)']>0)].copy()
-                if not sell.empty:
-                    sell['매도'] = sell['부족'].abs()
-                    sell['수량'] = sell['매도'] / sell['현재가($)']
-                    st.error("📉 매도 추천")
-                    st.dataframe(sell[['티커', '현재가($)', '수량', '매도']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.4f}', '매도':'${:,.2f}'}))
+                res = pd.DataFrame(final_data)
+                if not res.empty:
+                    val = res['현재평가액($)'].sum()
+                    sim = val + budget
+                    res['이상적'] = sim * (res['목표비중(%)']/100)
+                    res['부족'] = res['이상적'] - res['현재평가액($)']
+                    
+                    buy = res[(res['부족']>0) & (res['현재가($)']>0)].copy()
+                    if not buy.empty:
+                        need = buy['부족'].sum()
+                        ratio = budget/need if (need>budget and need>0) else 1
+                        buy['배정'] = buy['부족'] * ratio
+                        buy['수량'] = buy['배정'] / buy['현재가($)']
+                        st.success("🛒 매수 추천")
+                        st.dataframe(buy[['티커', '현재가($)', '수량', '배정']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.4f}', '배정':'${:,.2f}'}))
+                    else: st.info("매수 없음")
+                    
+                    sell = res[(res['부족']<0) & (res['현재가($)']>0)].copy()
+                    if not sell.empty:
+                        sell['매도'] = sell['부족'].abs()
+                        sell['수량'] = sell['매도'] / sell['현재가($)']
+                        st.error("📉 매도 추천")
+                        st.dataframe(sell[['티커', '현재가($)', '수량', '매도']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.4f}', '매도':'${:,.2f}'}))
+            else:
+                st.error("⚠️ 데이터 저장을 실패해서 계산을 중단했습니다. 권한 설정을 먼저 해결해주세요.")
 
 with tab2:
     st.markdown("### 📝 기록")
@@ -228,10 +230,10 @@ with tab2:
                 if tticker in pf['티커'].values:
                     if ttype=="매수(Buy)": pf.loc[pf['티커']==tticker, '보유수량']+=tqty
                     else: pf.loc[pf['티커']==tticker, '보유수량']-=tqty
-                    save_data(pf)
-                    save_history(pd.DataFrame([{"날짜":str(tdate), "티커":tticker, "구분":ttype, "단가($)":tprice, "수량":tqty, "총액($)":tprice*tqty}]))
-                    st.success("완료!")
-                    st.rerun()
+                    if save_data(pf):
+                        save_history(pd.DataFrame([{"날짜":str(tdate), "티커":tticker, "구분":ttype, "단가($)":tprice, "수량":tqty, "총액($)":tprice*tqty}]))
+                        st.success("완료!")
+                        st.rerun()
 
 with tab3:
     st.markdown("### 📜 내역")
@@ -239,11 +241,7 @@ with tab3:
 
 with tab4:
     st.markdown("### 📰 뉴스")
-    keywords = ["미국 증시", "연준 금리", "엔비디아", "테슬라"]
-    cols = st.columns(len(keywords))
-    for i, k in enumerate(keywords):
-        if cols[i].button(f"#{k}"): st.session_state['news']=k
-    target = st.session_state.get('news', "미국 증시")
+    target = st.text_input("검색어", "미국 증시")
     st.divider()
     try: items = get_news_feed(target)
     except: items = []
