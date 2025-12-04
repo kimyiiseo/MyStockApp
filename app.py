@@ -12,7 +12,7 @@ from datetime import datetime
 # [기본 설정]
 # ---------------------------------------------------------
 st.set_page_config(page_title="내 주식 파트너", layout="wide")
-st.title("📈 내 자산 관리 시스템 (6-Digit Precision)")
+st.title("📈 내 자산 관리 시스템 (Full Version)")
 
 # ---------------------------------------------------------
 # [구글 시트 연결]
@@ -25,7 +25,6 @@ def get_google_sheet_client():
         
         s = st.secrets["connections"]["gsheets"]
         
-        # 키 줄바꿈 수리
         raw_key = s.get("private_key", "")
         fixed_key = raw_key.replace("\\n", "\n")
         
@@ -145,7 +144,6 @@ with tab1:
         
     edited_df = st.data_editor(df, num_rows="dynamic", key="portfolio_editor",
         column_config={
-            # [수정] format="%.6f", step=0.000001 로 변경
             "보유수량": st.column_config.NumberColumn(format="%.6f", step=0.000001),
             "목표비중(%)": st.column_config.NumberColumn(format="%d%%", step=1),
         })
@@ -178,7 +176,6 @@ with tab1:
                         buy['배정'] = buy['부족'] * ratio
                         buy['수량'] = buy['배정'] / buy['현재가($)']
                         st.success("🛒 매수 추천")
-                        # [수정] 결과 화면도 소수점 6자리까지 보여주기 (.6f)
                         st.dataframe(buy[['티커', '현재가($)', '수량', '배정']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.6f}', '배정':'${:,.2f}'}))
                     else: st.info("매수 없음")
                     
@@ -187,8 +184,21 @@ with tab1:
                         sell['매도'] = sell['부족'].abs()
                         sell['수량'] = sell['매도'] / sell['현재가($)']
                         st.error("📉 매도 추천")
-                        # [수정] 결과 화면도 소수점 6자리까지 보여주기 (.6f)
                         st.dataframe(sell[['티커', '현재가($)', '수량', '매도']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.6f}', '매도':'${:,.2f}'}))
+                    
+                    # [복구된 차트 기능]
+                    st.divider()
+                    st.subheader("📊 현재 포트폴리오 비중")
+                    # 0원짜리는 빼고 차트 그림
+                    chart_data = res[res['현재평가액($)'] > 0]
+                    if not chart_data.empty:
+                        fig, ax = plt.subplots()
+                        ax.pie(chart_data['현재평가액($)'], labels=chart_data['티커'], autopct='%1.1f%%', startangle=90)
+                        ax.axis('equal') 
+                        st.pyplot(fig)
+                    else:
+                        st.info("차트에 표시할 자산 데이터가 없습니다.")
+
         else:
             st.error("저장 실패. 구글 시트 연결을 확인하세요.")
 
@@ -202,7 +212,6 @@ with tab2:
         tdate = c1.date_input("날짜", datetime.today())
         tticker = c2.selectbox("종목", tickers)
         tprice = c2.number_input("단가", min_value=0.0, step=0.01)
-        # [수정] 입력칸도 소수점 6자리 설정 (format="%.6f", step=0.000001)
         tqty = c3.number_input("수량", min_value=0.0, format="%.6f", step=0.000001)
         if st.form_submit_button("✅ 저장"):
             if tprice>0 and tqty>0:
