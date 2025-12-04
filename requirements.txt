@@ -3,4 +3,5 @@ pandas
 yfinance
 matplotlib
 feedparser
-st-gsheets-connection
+gspread
+google-auth
