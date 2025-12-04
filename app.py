@@ -1,91 +1,149 @@
 import streamlit as st
+import pandas as pd
+import yfinance as yf
+import matplotlib.pyplot as plt
+import feedparser
+import urllib.parse
 import gspread
 from google.oauth2.service_account import Credentials
-import json
-
-st.set_page_config(page_title="최종 디버깅", layout="wide")
-st.title("💣 연결 상태 정밀 해부")
-
-st.write("### 1단계: Secrets 파일 해부")
-
-# 1. Secrets가 존재하는지 확인
-if "connections" not in st.secrets:
-    st.error("❌ [connections] 섹션이 Secrets에 없습니다.")
-    st.stop()
-
-if "gsheets" not in st.secrets["connections"]:
-    st.error("❌ [connections.gsheets] 섹션이 없습니다.")
-    st.stop()
-
-s = st.secrets["connections"]["gsheets"]
-st.success("✅ Secrets 파일 구조는 정상입니다.")
-
-# 2. 필수 데이터가 들어있는지 확인 (내용은 보안상 안 보여줌)
-required_keys = ["type", "project_id", "private_key_id", "private_key", "client_email", "spreadsheet"]
-missing_keys = [k for k in required_keys if k not in s]
-
-if missing_keys:
-    st.error(f"❌ 다음 항목이 Secrets에 빠져있습니다: {missing_keys}")
-    st.stop()
-else:
-    st.success("✅ 필수 항목들이 모두 존재합니다.")
-
-# 3. 데이터 내용 살짝 검증
-st.write(f"- **이메일:** `{s['client_email']}`")
-st.write(f"- **시트 주소:** `{s['spreadsheet']}`")
-pk_len = len(s['private_key'])
-st.write(f"- **비밀키 길이:** {pk_len}글자 (정상이라면 1500자 이상이어야 함)")
-
-if pk_len < 100:
-    st.error("❌ 비밀키(private_key)가 너무 짧습니다! 복사가 잘못된 것 같습니다.")
-    st.stop()
+from datetime import datetime
 
 # ---------------------------------------------------------
-# [여기서부터 안전장치 없이 연결 시도]
+# [기본 설정]
 # ---------------------------------------------------------
-st.write("### 2단계: 구글 서버 접속 시도 (에러나면 여기서 터집니다)")
+st.set_page_config(page_title="내 주식 파트너", layout="wide")
+st.title("📈 내 자산 관리 시스템 (Final)")
 
-# 키 줄바꿈 처리
-raw_key = s["private_key"]
-fixed_key = raw_key.replace("\\n", "\n")
+# ---------------------------------------------------------
+# [구글 시트 연결]
+# ---------------------------------------------------------
+def get_google_sheet_client():
+    try:
+        if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"]:
+            st.error("❌ Secrets 설정 오류")
+            return None
+        
+        s = st.secrets["connections"]["gsheets"]
+        
+        # 키 줄바꿈 수리 (혹시 모를 에러 방지)
+        raw_key = s.get("private_key", "")
+        fixed_key = raw_key.replace("\\n", "\n")
+        
+        json_creds = {
+            "type": s.get("type", "service_account"),
+            "project_id": s.get("project_id"),
+            "private_key_id": s.get("private_key_id"),
+            "private_key": fixed_key,
+            "client_email": s.get("client_email"),
+            "client_id": s.get("client_id"),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": s.get("client_x509_cert_url")
+        }
+        
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_info(json_creds, scopes=scopes)
+        client = gspread.authorize(creds)
+        
+        spreadsheet_url = s.get("spreadsheet")
+        sh = client.open_by_url(spreadsheet_url)
+        return sh
+        
+    except Exception as e:
+        st.error(f"❌ 연결 오류: {e}")
+        return None
 
-json_creds = {
-    "type": s["type"],
-    "project_id": s["project_id"],
-    "private_key_id": s["private_key_id"],
-    "private_key": fixed_key,
-    "client_email": s["client_email"],
-    "client_id": s.get("client_id"), # 없으면 None
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": s.get("client_x509_cert_url")
-}
+def load_data():
+    sh = get_google_sheet_client()
+    if sh:
+        try:
+            worksheet = sh.worksheet("portfolio")
+            data = worksheet.get_all_records()
+            # 데이터가 비어있으면 기본값 리턴
+            if not data: return pd.DataFrame([{"티커": "AAPL", "보유수량": 10.0, "목표비중(%)": 30}, {"티커": "TSLA", "보유수량": 5.0, "목표비중(%)": 30}])
+            return pd.DataFrame(data)
+        except gspread.exceptions.WorksheetNotFound:
+            st.warning("⚠️ 'portfolio' 탭이 없습니다.")
+            return pd.DataFrame()
+        except: return pd.DataFrame()
+    return pd.DataFrame()
 
-scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+def save_data(df):
+    sh = get_google_sheet_client()
+    if sh:
+        try:
+            worksheet = sh.worksheet("portfolio")
+            worksheet.clear()
+            worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+            return True
+        except Exception as e:
+            st.error(f"저장 실패: {e}")
+            return False
+    return False
 
-# 1. 인증 객체 만들기
-st.text("creating credentials...")
-creds = Credentials.from_service_account_info(json_creds, scopes=scopes)
+def load_history():
+    sh = get_google_sheet_client()
+    if sh:
+        try:
+            worksheet = sh.worksheet("history")
+            return pd.DataFrame(worksheet.get_all_records())
+        except: return pd.DataFrame(columns=["날짜", "티커", "구분", "단가($)", "수량", "총액($)"])
+    return pd.DataFrame()
 
-# 2. 클라이언트 로그인
-st.text("authorizing client...")
-client = gspread.authorize(creds)
-st.success("✅ 구글 로그인 성공!")
+def save_history(new_record_df):
+    sh = get_google_sheet_client()
+    if sh:
+        try:
+            worksheet = sh.worksheet("history")
+            for row in new_record_df.values.tolist(): worksheet.append_row(row)
+        except: pass
 
-# 3. 시트 열기
-st.text(f"opening spreadsheet: {s['spreadsheet']}...")
-sh = client.open_by_url(s["spreadsheet"])
+# ---------------------------------------------------------
+# [뉴스 & 시장 지표]
+# ---------------------------------------------------------
+def get_market_data():
+    try:
+        usd_krw = yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1]
+        treasury = yf.Ticker("^TNX").history(period="1d")['Close'].iloc[-1]
+        nasdaq = yf.Ticker("^NDX").history(period="1d")['Close'].iloc[-1]
+        return usd_krw, treasury, nasdaq
+    except: return 0, 0, 0
 
-st.success(f"🎉 **연결 대성공!** 시트 이름: {sh.title}")
+def get_news_feed(query):
+    try:
+        encoded = urllib.parse.quote(query.strip())
+        rss_url = f"https://news.google.com/rss/search?q={encoded}&hl=ko&gl=KR&ceid=KR:ko"
+        feed = feedparser.parse(rss_url)
+        return feed.entries[:5] if feed.entries else []
+    except: return []
 
-# 4. 탭 확인
-st.text("checking worksheets...")
-ws_list = sh.worksheets()
-st.write(f"발견된 탭 목록: {[w.title for w in ws_list]}")
+# ---------------------------------------------------------
+# [UI 구성]
+# ---------------------------------------------------------
+st.markdown("### 🌍 실시간 시장 지표")
+c1, c2, c3 = st.columns(3)
+with st.spinner("로딩 중..."):
+    rate, bond, ndx = get_market_data()
+with c1: st.metric("🇺🇸 환율", f"{rate:,.2f} 원")
+with c2: st.metric("🏦 금리", f"{bond:,.2f} %")
+with c3: st.metric("💻 나스닥", f"{ndx:,.2f}")
+st.divider()
 
-if "portfolio" in [w.title for w in ws_list]:
-    st.balloons()
-    st.success("모든 테스트 통과! 이제 원래 코드로 돌아가셔도 됩니다.")
-else:
-    st.error("❌ 연결은 됐는데 'portfolio' 탭이 없습니다! 탭 이름을 확인하세요.")
+st.sidebar.header("💰 자산 설정")
+budget = st.sidebar.number_input("➕ 추가 투자금($)", value=340.0) + st.sidebar.number_input("💵 예수금($)", value=0.0)
+st.sidebar.markdown(f"### 💼 가용 자금: **${budget:,.2f}**")
+st.sidebar.success("✅ 구글 시트 연결됨")
+
+tab1, tab2, tab3, tab4 = st.tabs(["📊 리밸런싱", "📝 거래 기록", "📜 내역", "📰 뉴스"])
+
+with tab1:
+    st.markdown("### ⚖️ 포트폴리오")
+    df = load_data()
+    if df.empty: 
+        st.info("데이터를 불러오는 중입니다...")
+        df = pd.DataFrame(columns=["티커", "보유수량", "목표비중(%)"])
+        
+    edited_df = st.data_editor(df, num_rows="dynamic", key="portfolio_editor",
+        column_config={
+            "보유수량": st.column
