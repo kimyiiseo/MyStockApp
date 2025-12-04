@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import matplotlib.pyplot as plt
+# matplotlib 대신 plotly를 사용합니다
+import plotly.express as px 
 import feedparser
 import urllib.parse
 import gspread
@@ -12,7 +13,7 @@ from datetime import datetime
 # [기본 설정]
 # ---------------------------------------------------------
 st.set_page_config(page_title="내 주식 파트너", layout="wide")
-st.title("📈 내 자산 관리 시스템 (Full Version)")
+st.title("📈 내 자산 관리 시스템 (Treemap Ver.)")
 
 # ---------------------------------------------------------
 # [구글 시트 연결]
@@ -186,16 +187,26 @@ with tab1:
                         st.error("📉 매도 추천")
                         st.dataframe(sell[['티커', '현재가($)', '수량', '매도']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.6f}', '매도':'${:,.2f}'}))
                     
-                    # [복구된 차트 기능]
+                    # --------------------------------------------------
+                    # [변경된 부분] 사각형 트리맵 (Treemap)
+                    # --------------------------------------------------
                     st.divider()
-                    st.subheader("📊 현재 포트폴리오 비중")
-                    # 0원짜리는 빼고 차트 그림
+                    st.subheader("📊 내 자산 지도 (Treemap)")
+                    
                     chart_data = res[res['현재평가액($)'] > 0]
                     if not chart_data.empty:
-                        fig, ax = plt.subplots()
-                        ax.pie(chart_data['현재평가액($)'], labels=chart_data['티커'], autopct='%1.1f%%', startangle=90)
-                        ax.axis('equal') 
-                        st.pyplot(fig)
+                        # Plotly를 이용한 트리맵 그리기
+                        fig = px.treemap(
+                            chart_data, 
+                            path=['티커'],          # 네모 박스 이름
+                            values='현재평가액($)',   # 박스 크기 (평가액 기준)
+                            color='목표비중(%)',      # 박스 색깔 (목표비중 기준)
+                            hover_data=['보유수량', '현재가($)'], # 마우스 올리면 뜨는 정보
+                            color_continuous_scale='RdBu' # 색상 테마
+                        )
+                        # 차트 글자 크기 키우기
+                        fig.update_traces(textinfo="label+value", textfont_size=20)
+                        st.plotly_chart(fig, use_container_width=True)
                     else:
                         st.info("차트에 표시할 자산 데이터가 없습니다.")
 
