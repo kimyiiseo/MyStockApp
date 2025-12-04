@@ -12,7 +12,7 @@ from datetime import datetime
 # [기본 설정]
 # ---------------------------------------------------------
 st.set_page_config(page_title="내 주식 파트너", layout="wide")
-st.title("📈 내 자산 관리 시스템 (Final)")
+st.title("📈 내 자산 관리 시스템 (Final Fixed)")
 
 # ---------------------------------------------------------
 # [구글 시트 연결]
@@ -25,7 +25,7 @@ def get_google_sheet_client():
         
         s = st.secrets["connections"]["gsheets"]
         
-        # 키 줄바꿈 수리 (혹시 모를 에러 방지)
+        # 키 줄바꿈 수리
         raw_key = s.get("private_key", "")
         fixed_key = raw_key.replace("\\n", "\n")
         
@@ -60,7 +60,6 @@ def load_data():
         try:
             worksheet = sh.worksheet("portfolio")
             data = worksheet.get_all_records()
-            # 데이터가 비어있으면 기본값 리턴
             if not data: return pd.DataFrame([{"티커": "AAPL", "보유수량": 10.0, "목표비중(%)": 30}, {"티커": "TSLA", "보유수량": 5.0, "목표비중(%)": 30}])
             return pd.DataFrame(data)
         except gspread.exceptions.WorksheetNotFound:
@@ -131,7 +130,7 @@ with c3: st.metric("💻 나스닥", f"{ndx:,.2f}")
 st.divider()
 
 st.sidebar.header("💰 자산 설정")
-budget = st.sidebar.number_input("➕ 추가 투자금($)", value=340.0) + st.sidebar.number_input("💵 예수금($)", value=0.0)
+budget = st.sidebar.number_input("➕ 추가 투자금($)", value=340.0, step=10.0) + st.sidebar.number_input("💵 예수금($)", value=0.0, step=10.0)
 st.sidebar.markdown(f"### 💼 가용 자금: **${budget:,.2f}**")
 st.sidebar.success("✅ 구글 시트 연결됨")
 
@@ -146,8 +145,9 @@ with tab1:
         
     edited_df = st.data_editor(df, num_rows="dynamic", key="portfolio_editor",
         column_config={
-            "보유수량": st.column_config.NumberColumn(format="%.4f"),
-            "목표비중(%)": st.column_config.NumberColumn(format="%d%%"),
+            # [수정] step=0.0001을 추가하여 소수점 입력을 강제 허용
+            "보유수량": st.column_config.NumberColumn(format="%.4f", step=0.0001),
+            "목표비중(%)": st.column_config.NumberColumn(format="%d%%", step=1),
         })
         
     if st.button("💾 구글 시트에 저장 및 분석"):
@@ -199,8 +199,9 @@ with tab2:
         ttype = c1.selectbox("구분", ["매수(Buy)", "매도(Sell)"])
         tdate = c1.date_input("날짜", datetime.today())
         tticker = c2.selectbox("종목", tickers)
-        tprice = c2.number_input("단가", min_value=0.0)
-        tqty = c3.number_input("수량", min_value=0.0, format="%.4f")
+        tprice = c2.number_input("단가", min_value=0.0, step=0.01) # 소수점 허용
+        # [수정] step=0.0001 추가
+        tqty = c3.number_input("수량", min_value=0.0, format="%.4f", step=0.0001)
         if st.form_submit_button("✅ 저장"):
             if tprice>0 and tqty>0:
                 if tticker in pf['티커'].values:
