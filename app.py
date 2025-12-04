@@ -3,14 +3,15 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import os
-import feedparser  # 뉴스를 가져오는 도구 추가!
+import feedparser
+import urllib.parse # [중요] 한글 URL을 변환해주는 도구 추가!
 from datetime import datetime
 
 # ---------------------------------------------------------
 # [기본 설정]
 # ---------------------------------------------------------
 st.set_page_config(page_title="내 주식 파트너", layout="wide")
-st.title("📈 내 자산 관리 시스템 (News Feed Ver.)")
+st.title("📈 내 자산 관리 시스템 (Final Fix)")
 
 CSV_FILE = 'my_portfolio.csv'
 HISTORY_FILE = 'trade_history.csv'
@@ -45,12 +46,21 @@ def get_market_data():
     except:
         return 0, 0, 0
 
-# [NEW] 뉴스 가져오는 함수
+# [수정됨] 뉴스 가져오기 (한글 인코딩 추가)
 def get_news_feed(query):
-    # 구글 뉴스 RSS 주소 (검색어 기반, 한국어 설정)
-    rss_url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
-    feed = feedparser.parse(rss_url)
-    return feed.entries[:5] # 최신 기사 5개만 반환
+    # 한글 검색어를 URL용 외계어로 변환 (예: 미국증시 -> %EB%AF%B8...)
+    encoded_query = urllib.parse.quote(query)
+    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
+    
+    # 안전하게 뉴스 가져오기
+    try:
+        feed = feedparser.parse(rss_url)
+        if feed.entries:
+            return feed.entries[:5]
+        else:
+            return []
+    except Exception as e:
+        return []
 
 # ---------------------------------------------------------
 # [상단] 시장 지표
@@ -105,46 +115,70 @@ with tab1:
                 try:
                     stock = yf.Ticker(ticker)
                     history = stock.history(period="1d")
-                    current_price = history['Close'].iloc[-1] if not history.empty else 0
+                    # [수정] 데이터가 없으면 확실하게 0 처리
+                    if not history.empty:
+                        current_price = history['Close'].iloc[-1]
+                    else:
+                        current_price = 0
                 except: current_price = 0
+                
+                # 가격 오류 시 경고
+                if current_price == 0:
+                    st.toast(f"⚠️ {ticker} 가격을 가져오지 못했습니다. 계산에서 제외됩니다.")
+
                 final_data.append({"티커": ticker, "보유수량": qty, "현재가($)": current_price, "현재평가액($)": current_price * qty, "목표비중(%)": target_pct})
             
             result_df = pd.DataFrame(final_data)
+            
             if not result_df.empty:
-                total_stock_value = result_df['현재평가액($)'].sum()
-                simulated_total_asset = total_stock_value + available_budget
-                result_df['이상적_목표금액($)'] = simulated_total_asset * (result_df['목표비중(%)'] / 100)
-                result_df['부족한금액($)'] = result_df['이상적_목표금액($)'] - result_df['현재평가액($)']
+                # [안전 장치] 가격이 0원인 종목은 제외하고 계산 (에러 방지!)
+                valid_df = result_df[result_df['현재가($)'] > 0].copy()
                 
-                # 매수 로직
-                buy_df = result_df[result_df['부족한금액($)'] > 0].copy()
-                if not buy_df.empty:
-                    total_needed = buy_df['부족한금액($)'].sum()
-                    if total_needed > available_budget:
-                        ratio = available_budget / total_needed
-                        buy_df['배정된_매수금액($)'] = buy_df['부족한금액($)'] * ratio
-                    else:
-                        buy_df['배정된_매수금액($)'] = buy_df['부족한금액($)']
-                    buy_df['추천_수량'] = buy_df.apply(lambda x: x['배정된_매수금액($)'] / x['현재가($)'] if x['현재가($)'] > 0 else 0, axis=1)
-
-                # 매도 로직
-                sell_df = result_df[result_df['부족한금액($)'] < 0].copy()
-                if not sell_df.empty:
-                    sell_df['매도해야할금액($)'] = sell_df['부족한금액($)'].abs()
-                    sell_df['추천_수량'] = sell_df.apply(lambda x: x['매도해야할금액($)'] / x['현재가($)'] if x['현재가($)'] > 0 else 0, axis=1)
-
-                st.divider()
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.success("🛒 **매수(Buy) 추천**")
+                if valid_df.empty:
+                    st.error("❌ 현재 가격을 가져올 수 있는 종목이 하나도 없습니다. 잠시 후 다시 시도해주세요.")
+                else:
+                    total_stock_value = valid_df['현재평가액($)'].sum()
+                    simulated_total_asset = total_stock_value + available_budget
+                    
+                    # 원본 데이터프레임에 계산 결과 병합 (0원인 것도 표시하기 위해)
+                    result_df['이상적_목표금액($)'] = simulated_total_asset * (result_df['목표비중(%)'] / 100)
+                    result_df['부족한금액($)'] = result_df['이상적_목표금액($)'] - result_df['현재평가액($)']
+                    
+                    # 1. 매수 로직
+                    buy_df = result_df[(result_df['부족한금액($)'] > 0) & (result_df['현재가($)'] > 0)].copy()
+                    
                     if not buy_df.empty:
-                        st.dataframe(buy_df[['티커', '현재가($)', '추천_수량', '배정된_매수금액($)']].style.format({'현재가($)': '${:,.2f}', '추천_수량': '{:.4f}', '배정된_매수금액($)': '${:,.2f}'}))
-                    else: st.info("매수 대상 없음")
-                with c2:
-                    st.error("📉 **매도(Sell) 추천**")
+                        total_needed = buy_df['부족한금액($)'].sum()
+                        # 예산 배분
+                        if total_needed > available_budget:
+                            ratio = available_budget / total_needed if total_needed > 0 else 0
+                            buy_df['배정된_매수금액($)'] = buy_df['부족한금액($)'] * ratio
+                        else:
+                            buy_df['배정된_매수금액($)'] = buy_df['부족한금액($)']
+                        
+                        # [핵심] 0으로 나누기 방지
+                        buy_df['추천_수량'] = buy_df.apply(lambda x: x['배정된_매수금액($)'] / x['현재가($)'] if x['현재가($)'] > 0 else 0, axis=1)
+
+                    # 2. 매도 로직
+                    sell_df = result_df[(result_df['부족한금액($)'] < 0) & (result_df['현재가($)'] > 0)].copy()
+                    
                     if not sell_df.empty:
-                        st.dataframe(sell_df[['티커', '현재가($)', '추천_수량', '매도해야할금액($)']].style.format({'현재가($)': '${:,.2f}', '추천_수량': '{:.4f}', '매도해야할금액($)': '${:,.2f}'}))
-                    else: st.info("매도 대상 없음")
+                        sell_df['매도해야할금액($)'] = sell_df['부족한금액($)'].abs()
+                        sell_df['추천_수량'] = sell_df.apply(lambda x: x['매도해야할금액($)'] / x['현재가($)'] if x['현재가($)'] > 0 else 0, axis=1)
+
+                    # 화면 출력
+                    st.divider()
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.success("🛒 **매수(Buy) 추천**")
+                        if not buy_df.empty:
+                            st.dataframe(buy_df[['티커', '현재가($)', '추천_수량', '배정된_매수금액($)']].style.format({'현재가($)': '${:,.2f}', '추천_수량': '{:.4f}', '배정된_매수금액($)': '${:,.2f}'}))
+                        else: st.info("매수 대상 없음")
+                    with c2:
+                        st.error("📉 **매도(Sell) 추천**")
+                        if not sell_df.empty:
+                            st.dataframe(sell_df[['티커', '현재가($)', '추천_수량', '매도해야할금액($)']].style.format({'현재가($)': '${:,.2f}', '추천_수량': '{:.4f}', '매도해야할금액($)': '${:,.2f}'}))
+                        else: st.info("매도 대상 없음")
 
 # =========================================================
 # [탭 2] 거래 기록
@@ -188,16 +222,12 @@ with tab3:
     st.dataframe(load_history())
 
 # =========================================================
-# [탭 4] 뉴스룸 (NEW!)
+# [탭 4] 뉴스룸 (한글 오류 해결!)
 # =========================================================
 with tab4:
     st.markdown("### 📰 실시간 맞춤 뉴스")
-    st.caption("관심 키워드의 최신 기사를 앱 내에서 바로 확인하세요.")
     
-    # 보고 싶은 뉴스 키워드 목록
     keywords = ["미국 증시", "연준 금리", "나스닥 전망", "엔비디아", "테슬라"]
-    
-    # 탭을 선택하면 바로 로딩
     cols = st.columns(len(keywords))
     
     for i, keyword in enumerate(keywords):
@@ -205,7 +235,6 @@ with tab4:
             if st.button(f"#{keyword}", key=f"news_{i}"):
                 st.session_state['selected_news'] = keyword
 
-    # 기본값 또는 선택된 키워드
     if 'selected_news' not in st.session_state:
         st.session_state['selected_news'] = "미국 증시"
 
@@ -214,13 +243,13 @@ with tab4:
     st.subheader(f"🔍 '{target_keyword}' 관련 최신 뉴스")
     
     with st.spinner('뉴스를 불러오는 중...'):
+        # 여기서 아까 만든 안전한 함수를 호출합니다
         news_items = get_news_feed(target_keyword)
         
         if news_items:
             for item in news_items:
-                # 기사 하나하나를 카드로 보여주기
                 with st.expander(f"📢 {item.title}"):
                     st.markdown(f"**발행일:** {item.get('published', '날짜 정보 없음')}")
                     st.markdown(f"[기사 원문 읽기 (클릭)]({item.link})")
         else:
-            st.warning("관련된 최신 뉴스를 찾지 못했습니다.")
+            st.info("뉴스를 가져오지 못했습니다. 잠시 후 다시 시도해주세요.")
