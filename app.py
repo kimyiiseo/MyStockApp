@@ -62,6 +62,12 @@ def load_data():
         except gspread.exceptions.WorksheetNotFound:
             st.error("'portfolio' 탭을 찾을 수 없습니다.")
             return pd.DataFrame()
+        except Exception as e:
+             # 데이터가 아직 없거나 읽기 오류 시 기본값
+            return pd.DataFrame([
+                    {"티커": "AAPL", "보유수량": 10.0, "목표비중(%)": 30},
+                    {"티커": "TSLA", "보유수량": 5.0, "목표비중(%)": 30},
+            ])
     return pd.DataFrame()
 
 # 데이터 저장 함수
@@ -190,12 +196,12 @@ with tab1:
                             total_needed = buy_df['부족한금액($)'].sum()
                             ratio = available_budget / total_needed if (total_needed > available_budget and total_needed > 0) else 1
                             buy_df['배정된_매수금액($)'] = buy_df['부족한금액($)'] * ratio
-                            buy_df['추천_수량'] = buy_df.apply(lambda x: x['배정된_매수금액($)'] / x['현재가($)'], axis=1)
+                            buy_df['추천_수량'] = buy_df.apply(lambda x: x['배정된_매수금액($)'] / x['현재가($)'] if x['현재가($)'] > 0 else 0, axis=1)
 
                         sell_df = result_df[(result_df['부족한금액($)'] < 0) & (result_df['현재가($)'] > 0)].copy()
                         if not sell_df.empty:
                             sell_df['매도해야할금액($)'] = sell_df['부족한금액($)'].abs()
-                            sell_df['추천_수량'] = sell_df.apply(lambda x: x['매도해야할금액($)'] / x['현재가($)'], axis=1)
+                            sell_df['추천_수량'] = sell_df.apply(lambda x: x['매도해야할금액($)'] / x['현재가($)'] if x['현재가($)'] > 0 else 0, axis=1)
 
                         st.divider()
                         c1, c2 = st.columns(2)
@@ -242,7 +248,6 @@ with tab2:
                         save_data(current_portfolio) # 변경된 포트폴리오 저장
                         
                         # 2. 거래 내역 저장 (데이터프레임 생성 후 리스트로 변환하여 저장)
-                        # 날짜를 문자열로 변환하여 JSON 직렬화 문제 방지
                         new_record = pd.DataFrame([{"날짜": str(date_input), "티커": ticker_input, "구분": trade_type, "단가($)": price_input, "수량": qty_input, "총액($)": price_input * qty_input}])
                         save_history(new_record) 
                         
