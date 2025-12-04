@@ -146,4 +146,81 @@ with tab1:
         
     edited_df = st.data_editor(df, num_rows="dynamic", key="portfolio_editor",
         column_config={
-            "보유수량": st.column
+            "보유수량": st.column_config.NumberColumn(format="%.4f"),
+            "목표비중(%)": st.column_config.NumberColumn(format="%d%%"),
+        })
+        
+    if st.button("💾 구글 시트에 저장 및 분석"):
+        if save_data(edited_df):
+            with st.spinner('계산 중...'):
+                final_data = []
+                for idx, row in edited_df.iterrows():
+                    try:
+                        ticker = row.get('티커')
+                        if not ticker: continue
+                        qty = float(row.get('보유수량', 0))
+                        tgt = float(row.get('목표비중(%)', 0))
+                        stock = yf.Ticker(ticker)
+                        price = stock.history(period="1d")['Close'].iloc[-1]
+                    except: price = 0
+                    final_data.append({"티커": ticker, "보유수량": qty, "현재가($)": price, "현재평가액($)": price*qty, "목표비중(%)": tgt})
+                
+                res = pd.DataFrame(final_data)
+                if not res.empty:
+                    val = res['현재평가액($)'].sum()
+                    res['이상적'] = (val + budget) * (res['목표비중(%)']/100)
+                    res['부족'] = res['이상적'] - res['현재평가액($)']
+                    
+                    buy = res[(res['부족']>0) & (res['현재가($)']>0)].copy()
+                    if not buy.empty:
+                        need = buy['부족'].sum()
+                        ratio = budget/need if (need>budget and need>0) else 1
+                        buy['배정'] = buy['부족'] * ratio
+                        buy['수량'] = buy['배정'] / buy['현재가($)']
+                        st.success("🛒 매수 추천")
+                        st.dataframe(buy[['티커', '현재가($)', '수량', '배정']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.4f}', '배정':'${:,.2f}'}))
+                    else: st.info("매수 없음")
+                    
+                    sell = res[(res['부족']<0) & (res['현재가($)']>0)].copy()
+                    if not sell.empty:
+                        sell['매도'] = sell['부족'].abs()
+                        sell['수량'] = sell['매도'] / sell['현재가($)']
+                        st.error("📉 매도 추천")
+                        st.dataframe(sell[['티커', '현재가($)', '수량', '매도']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.4f}', '매도':'${:,.2f}'}))
+        else:
+            st.error("저장 실패. 구글 시트 연결을 확인하세요.")
+
+with tab2:
+    st.markdown("### 📝 기록")
+    pf = load_data()
+    tickers = pf['티커'].tolist() if not pf.empty and '티커' in pf.columns else []
+    with st.form("trade"):
+        c1,c2,c3 = st.columns(3)
+        ttype = c1.selectbox("구분", ["매수(Buy)", "매도(Sell)"])
+        tdate = c1.date_input("날짜", datetime.today())
+        tticker = c2.selectbox("종목", tickers)
+        tprice = c2.number_input("단가", min_value=0.0)
+        tqty = c3.number_input("수량", min_value=0.0, format="%.4f")
+        if st.form_submit_button("✅ 저장"):
+            if tprice>0 and tqty>0:
+                if tticker in pf['티커'].values:
+                    if ttype=="매수(Buy)": pf.loc[pf['티커']==tticker, '보유수량']+=tqty
+                    else: pf.loc[pf['티커']==tticker, '보유수량']-=tqty
+                    if save_data(pf):
+                        save_history(pd.DataFrame([{"날짜":str(tdate), "티커":tticker, "구분":ttype, "단가($)":tprice, "수량":tqty, "총액($)":tprice*tqty}]))
+                        st.success("완료!")
+                        st.rerun()
+
+with tab3:
+    st.markdown("### 📜 내역")
+    st.dataframe(load_history())
+
+with tab4:
+    st.markdown("### 📰 뉴스")
+    target = st.text_input("검색", "미국 증시")
+    try: items = get_news_feed(target)
+    except: items = []
+    if items:
+        for i in items:
+            with st.expander(f"📢 {i.title}"): st.write(f"[기사 보기]({i.link})")
+    else: st.info("뉴스 없음")
