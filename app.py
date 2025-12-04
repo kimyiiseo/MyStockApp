@@ -12,7 +12,7 @@ from datetime import datetime
 # [기본 설정]
 # ---------------------------------------------------------
 st.set_page_config(page_title="내 주식 파트너", layout="wide")
-st.title("📈 내 자산 관리 시스템 (Final Fixed)")
+st.title("📈 내 자산 관리 시스템 (6-Digit Precision)")
 
 # ---------------------------------------------------------
 # [구글 시트 연결]
@@ -145,8 +145,8 @@ with tab1:
         
     edited_df = st.data_editor(df, num_rows="dynamic", key="portfolio_editor",
         column_config={
-            # [수정] step=0.0001을 추가하여 소수점 입력을 강제 허용
-            "보유수량": st.column_config.NumberColumn(format="%.4f", step=0.0001),
+            # [수정] format="%.6f", step=0.000001 로 변경
+            "보유수량": st.column_config.NumberColumn(format="%.6f", step=0.000001),
             "목표비중(%)": st.column_config.NumberColumn(format="%d%%", step=1),
         })
         
@@ -178,7 +178,8 @@ with tab1:
                         buy['배정'] = buy['부족'] * ratio
                         buy['수량'] = buy['배정'] / buy['현재가($)']
                         st.success("🛒 매수 추천")
-                        st.dataframe(buy[['티커', '현재가($)', '수량', '배정']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.4f}', '배정':'${:,.2f}'}))
+                        # [수정] 결과 화면도 소수점 6자리까지 보여주기 (.6f)
+                        st.dataframe(buy[['티커', '현재가($)', '수량', '배정']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.6f}', '배정':'${:,.2f}'}))
                     else: st.info("매수 없음")
                     
                     sell = res[(res['부족']<0) & (res['현재가($)']>0)].copy()
@@ -186,7 +187,8 @@ with tab1:
                         sell['매도'] = sell['부족'].abs()
                         sell['수량'] = sell['매도'] / sell['현재가($)']
                         st.error("📉 매도 추천")
-                        st.dataframe(sell[['티커', '현재가($)', '수량', '매도']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.4f}', '매도':'${:,.2f}'}))
+                        # [수정] 결과 화면도 소수점 6자리까지 보여주기 (.6f)
+                        st.dataframe(sell[['티커', '현재가($)', '수량', '매도']].style.format({'현재가($)':'${:,.2f}', '수량':'{:.6f}', '매도':'${:,.2f}'}))
         else:
             st.error("저장 실패. 구글 시트 연결을 확인하세요.")
 
@@ -199,9 +201,9 @@ with tab2:
         ttype = c1.selectbox("구분", ["매수(Buy)", "매도(Sell)"])
         tdate = c1.date_input("날짜", datetime.today())
         tticker = c2.selectbox("종목", tickers)
-        tprice = c2.number_input("단가", min_value=0.0, step=0.01) # 소수점 허용
-        # [수정] step=0.0001 추가
-        tqty = c3.number_input("수량", min_value=0.0, format="%.4f", step=0.000001)
+        tprice = c2.number_input("단가", min_value=0.0, step=0.01)
+        # [수정] 입력칸도 소수점 6자리 설정 (format="%.6f", step=0.000001)
+        tqty = c3.number_input("수량", min_value=0.0, format="%.6f", step=0.000001)
         if st.form_submit_button("✅ 저장"):
             if tprice>0 and tqty>0:
                 if tticker in pf['티커'].values:
